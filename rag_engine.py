@@ -54,6 +54,7 @@ def get_google_genai_client() -> genai.Client:
     Initializes Google GenAI Client for Vertex AI / Gemini API.
     Prioritizes GEMINI_API_KEY/GOOGLE_API_KEY, then Vertex AI credentials.
     """
+    import shutil
     api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
     project = get_secret("GOOGLE_CLOUD_PROJECT")
     location = get_secret("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -62,19 +63,23 @@ def get_google_genai_client() -> genai.Client:
         return genai.Client(api_key=api_key)
     
     if project:
-        # Fetch token from gcloud CLI if running locally
-        try:
-            token = subprocess.check_output("gcloud auth print-access-token", shell=True, text=True).strip()
-            if token:
-                creds = Credentials(token)
-                return genai.Client(vertexai=True, project=project, location=location, credentials=creds)
-        except Exception as e:
-            print(f"gcloud access token fetch notice: {e}")
+        # Check if gcloud CLI exists before calling subprocess (local dev vs Streamlit Cloud)
+        if shutil.which("gcloud"):
+            try:
+                token = subprocess.check_output("gcloud auth print-access-token", shell=True, text=True).strip()
+                if token:
+                    creds = Credentials(token)
+                    return genai.Client(vertexai=True, project=project, location=location, credentials=creds)
+            except Exception as e:
+                print(f"gcloud access token fetch notice: {e}")
 
-        return genai.Client(vertexai=True, project=project, location=location)
+        try:
+            return genai.Client(vertexai=True, project=project, location=location)
+        except Exception as e:
+            print(f"Vertex AI client default init notice: {e}")
 
     raise ValueError(
-        "Google AI Authentication missing in secrets / .env. Please set GEMINI_API_KEY or GOOGLE_API_KEY."
+        "Google AI Authentication missing. Please add GEMINI_API_KEY = \"your_key\" to Streamlit Cloud Secrets."
     )
 
 
