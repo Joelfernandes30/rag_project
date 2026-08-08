@@ -52,34 +52,58 @@ def get_supabase_client() -> Client:
 def get_google_genai_client() -> genai.Client:
     """
     Initializes Google GenAI Client for Vertex AI / Gemini API.
-    Prioritizes GEMINI_API_KEY/GOOGLE_API_KEY, then Vertex AI credentials.
+    Supports GCP Vertex AI Service Account JSON (via st.secrets['gcp_service_account'] or sa_key.json),
+    gcloud CLI access token, or direct GEMINI_API_KEY.
     """
     import shutil
+    from google.oauth2 import service_account
+
     api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
-    project = get_secret("GOOGLE_CLOUD_PROJECT")
+    project = get_secret("GOOGLE_CLOUD_PROJECT", "project-f6280df9-ac10-4ee7-8fb")
     location = get_secret("GOOGLE_CLOUD_LOCATION", "us-central1")
 
+    # 1. Vertex AI via GCP Service Account in Streamlit Cloud Secrets (st.secrets["gcp_service_account"])
+    try:
+        import streamlit as st
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = service_account.Credentials.from_service_account_info(
+                creds_dict,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            proj = creds_dict.get("project_id") or project
+            return genai.Client(vertexai=True, project=proj, location=location, credentials=creds)
+    except Exception as e:
+        print(f"Streamlit secrets GCP Service Account notice: {e}")
+
+    # 2. Vertex AI via local sa_key.json file
+    sa_key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sa_key.json")
+    if os.path.exists(sa_key_path) and os.path.getsize(sa_key_path) > 10:
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                sa_key_path,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            return genai.Client(vertexai=True, project=project, location=location, credentials=creds)
+        except Exception as e:
+            print(f"sa_key.json init notice: {e}")
+
+    # 3. Direct Gemini API Key if provided
     if api_key:
         return genai.Client(api_key=api_key)
     
-    if project:
-        # Check if gcloud CLI exists before calling subprocess (local dev vs Streamlit Cloud)
-        if shutil.which("gcloud"):
-            try:
-                token = subprocess.check_output("gcloud auth print-access-token", shell=True, text=True).strip()
-                if token:
-                    creds = Credentials(token)
-                    return genai.Client(vertexai=True, project=project, location=location, credentials=creds)
-            except Exception as e:
-                print(f"gcloud access token fetch notice: {e}")
-
+    # 4. Local machine fallback via active gcloud CLI token
+    if project and shutil.which("gcloud"):
         try:
-            return genai.Client(vertexai=True, project=project, location=location)
+            token = subprocess.check_output("gcloud auth print-access-token", shell=True, text=True).strip()
+            if token:
+                creds = Credentials(token)
+                return genai.Client(vertexai=True, project=project, location=location, credentials=creds)
         except Exception as e:
-            print(f"Vertex AI client default init notice: {e}")
+            print(f"gcloud access token fetch notice: {e}")
 
     raise ValueError(
-        "Google AI Authentication missing. Please add GEMINI_API_KEY = \"your_key\" to Streamlit Cloud Secrets."
+        "GCP Vertex AI Authentication missing. Please add [gcp_service_account] secrets to Streamlit Cloud Secrets."
     )
 
 
